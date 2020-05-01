@@ -1,165 +1,163 @@
-// Объявляем основные переменные
-const width = 1000;
-const height = 500;
-const margin = 30;
-const svg  = d3.select('#scatter-plot')
-            .attr('width', width)
-            .attr('height', height);
+const b_width = 1000;
+const d_width = 500;
+const b_height = 1000;
+const d_height = 1000;
+const colors = [
+    '#DB202C','#a6cee3','#1f78b4',
+    '#33a02c','#fb9a99','#b2df8a',
+    '#fdbf6f','#ff7f00','#cab2d6',
+    '#6a3d9a','#ffff99','#b15928']
 
-// Указываем изначальные значения, на основе которых будет строится график
-let xParam = 'fertility-rate';
-let yParam = 'child-mortality';
-let radius = 'gdp';
-let year = '2000';
+// Part 1: Создать шкалы для цвета, радиуса и позиции +
+const radius = d3.scaleLinear().range([.5, 20]);
+const color = d3.scaleOrdinal().range(colors);
+const x = d3.scaleLinear().range([0, b_width]);
 
-// Эти переменные понадобятся в Part 2 и 3
-const params = ['child-mortality', 'fertility-rate', 'gdp', 'life-expectancy', 'population'];
-const colors = ['aqua', 'lime', 'gold', 'hotpink']
+const bubble = d3.select('.bubble-chart')
+    .attr('width', b_width).attr('height', b_height);
+const donut = d3.select('.donut-chart')
+    .attr('width', d_width).attr('height', d_height)
+    .append("g")
+    .attr("transform", "translate(" + d_width / 2 + "," + d_height / 2 + ")");
 
-// Создаем шкалы для осей и точек
-const x = d3.scaleLinear().range([margin*2, width-margin]);
-const y = d3.scaleLinear().range([height-margin, margin]);
+const donut_lable = d3.select('.donut-chart').append('text')
+        .attr('class', 'donut-lable')
+        .attr("text-anchor", "middle")
+        .attr('transform', `translate(${(d_width/2)} ${d_height/2})`);
+const tooltip = d3.select('.tooltip');
 
-
-
-// Создаем наименования для шкал и помещаем их на законные места сохраняя переменные
-const xLable = svg.append('text').attr('transform', `translate(${width/2}, ${height})`);
-const yLable = svg.append('text').attr('transform', `translate(${margin/2}, ${height/2}) rotate(-90)`);
-
-// Part 1: по аналогии со строчками сверху задайте атрибуты 'transform' чтобы переместить оси +
-const xAxis = svg.append('g').attr('transform', `translate(0, 460)`);
-const yAxis = svg.append('g').attr('transform', `translate(61, -10) rotate(+90)`);
-
-
-// Part 2: Здесь можно создать шкалы для цвета и радиуса объектов +-
-const color = d3.scaleOrdinal(); //.range(colors);
-const r = d3.scaleSqrt(); //.range(params);
-
-// Part 2: для элемента select надо задать options http://htmlbook.ru/html/select
-// и установить selected для дефолтного значения
-
-d3.select('#radius').selectAll('option');
+//  Part 1 - Создать симуляцию с использованием forceCenter(), forceX() и forceCollide() +-
+const simulation = d3.forceSimulation()
+        //.nodes(nodes)
+        .force("center", d3.forceCenter(b_width / 2, b_height / 2))
+        .force("force_x", d3.forceX(d => x(d['release year'])))
+        .force("collide", d3.forceCollide().radius(d => radius(d['user rating score'])));
 
 
-
-// Part 3: то же что делали выше, но для осей
-d3.select('#xax').selectAll('option');
-d3.select('#yax').selectAll('option');
-
-
-loadData().then(data => {
-    // сюда мы попадаем после загружки данных и можем для начала на них посмортеть:
+d3.csv('data/netflix.csv').then(data=>{
+    data = d3.nest().key(d=>d.title).rollup(d=>d[0]).entries(data).map(d=>d.value).filter(d=>d['user rating score']!=='NA');
     console.log(data)
+    
+    const rating = data.map(d=>+d['user rating score']);
+    const years = data.map(d=>+d['release year']);
+    let ratings = d3.nest().key(d=>d.rating).rollup(d=>d.length).entries(data);
+    
+    
+    // Part 1 - задать domain  для шкал цвета, радиуса и положения по x
+    color.domain(ratings);
+    radius.domain([d3.min(rating), d3.max(rating)]);
+    x.domain([d3.min(years), d3.max(years)]);
 
-    // Part 2: здесь мы можем задать пораметр 'domain' для цветовой шкалы
-    // для этого нам нужно получить все уникальные значения поля 'region', сделать это можно при помощи 'd3.nest' +-
-    let regions = d3.nest().key(d => d.region)
-                    .rollup(d => d[0]).entries(data).map(d => d.key);
-    color.domain(regions);
+    // Part 1 - создать circles на основе data
+    var nodes = bubble
+        .selectAll("circle")
+        .data(data)
+        .enter()
+        .append("circle")
+        .attr('r', d => radius(+d['user rating score']))
+        .style('fill', d => color(d.rating))
+        .style("opacity", 1) //для лучшей разницы;
 
-    // подписка на изменение позиции ползунка
-    d3.select('.slider').on('change', newYear);
+    // добавляем обработчики событий mouseover и mouseout
+    nodes.on('mouseover', overBubble).on('mouseout', outOfBubble);
 
-    // подписка на событие 'change' элемента 'select'
-    d3.select('#radius').on('change', newRadius);
-
-    // Part 3: подпишемся на изменения селектороы параметров осей
-    d3.select('#xParam').on('change', newXParam);
-    d3.select('#yParam').on('change', newYParam);
-
-    // изменяем значение переменной и обновляем график
-    function newYear(){
-        year = this.value;
-        updateChart()
+    
+    // Part 1 - передать данные в симуляцию и добавить обработчик события tick
+    function ticked() {
+        nodes.attr("cx", function(d) { return d.x; })
+            .attr("cy", function(d) { return d.y; });
     }
 
-    function newRadius(){
-        // Part 2: по аналогии с newYear +-
-        radius = this.value;
-        updateChart()
-    }
+    simulation.nodes(data).on("tick", ticked);
 
-    function newXParam(){
-        // Part 2: по аналогии с newYear +-
-        xParam = this.value;
-        updateChart()
-    }
+    
+    // Part 1 - Создать шаблон при помощи d3.pie() на основе ratings
+    var ratings_sample = d3.pie()
+        //.value(ratings); //?
+        .value(d => d.value );
+    
+    // Part 1 - Создать генератор арок при помощи d3.arc()
+    var arc = d3.arc()
+        .innerRadius(150) // it'll be donut chart
+        .outerRadius(250)
+        .padAngle(0.02)
+        .cornerRadius(5);
+    
+    // Part 1 - построить donut chart внутри donut
+    donut.selectAll('path')
+        .data(ratings_sample(ratings))
+        .enter().append('path')
+        .attr('d', arc) // каждый элемент будет передан в генератор
+        .attr('fill', d => color(d.data.key))
+        .style("opacity", 1) //для лучшей разницы
+        .on('mouseover', overArc) // добавляем обработчики событий mouseover и mouseout
+        .on('mouseout', outOfArc);
 
-    function newYParam(){
-        // Part 2: по аналогии с newYear +-
-        yParam = this.value;
-        updateChart()
-    }
+    /*var currentElement = null;
 
-    function updateChart(){
-        // Обновляем все лейблы в соответствии с текущем состоянием
-        //alert(xParam);
-        xLable.text(xParam);
-        yLable.text(yParam);
-        d3.select('.year').text(year);
+    document.addEventListener('mouseover', function (e) {
+        currentElement = e.target;
+    });*/
 
-        // обновляем параметры шкалы и ось 'x' в зависимости от выбранных значений
-        // P.S. не стоит забывать, что значения показателей изначально представленны в строчном формате, по этому преобразуем их в Number при помощи +
-        let xRange = data.map(d=> +d[xParam][year]);
-        x.domain([d3.min(xRange), d3.max(xRange)]);
-
-        // и вызовим функцию для ее отрисовки
-        xAxis.call(d3.axisBottom(x));    
-
-        // Part 1: нужно сделать то же самое и для 'y' +
-        let yRange = data.map(d=> +d[yParam][year]);
-        y.domain([d3.min(yRange), d3.max(yRange)]);
-
-        yAxis.call(d3.axisBottom(y));  
+    function overBubble(d){
+        console.log(d)
+        // Part 2 - задать stroke и stroke-width для выделяемого элемента   
+        /*bubble
+        .selectAll('circle').querySelectorAll( ":hover" )*/
+        d3.select(this)
+            .attr('stroke', '#1c1c1c')
+            .attr('stroke-width', 1.5);
         
-        // Part 2: теперь у нас есть еще одна не постоянная шкала
-        let rRange = data.map(d=> +d[radius][year]);
-        r.domain([d3.min(rRange), d3.max(rRange)]);
+        // Part 3 - обновить содержимое tooltip с использованием классов title и year
+        d3.select('.tooltip').html(d.title + "<br>" + d['release year'])
+        // Part 3 - изменить display и позицию tooltip
+            .style("left", (d3.event.pageX+0.5*radius(d['user rating score']))+ "px") //eturns the horizontal coordinate of the event relative to the whole document.
+            .style("top", (d3.event.pageY+0.5*radius(d['user rating score'])) + "px")
+            .style('display',"block");
 
-        let colorRange = data.map(d=> +d[radius][year]);
-        let rLen = d3.max(colorRange)-d3.min(colorRange);
-        color
-            .domain([d3.min(colorRange), rLen/3, rLen*2/3, d3.max(colorRange)])
-            .range(['aqua', 'lime', 'gold', 'hotpink']);
-
-        // Part 1, 2: создаем и обновляем состояние точек  
-
-        var p = svg.selectAll('circle').data(data)
-            .attr('cx', function(d) { return x(+d[xParam][year]); })
-            .attr('cy', function(d) { return y(+d[yParam][year]); })
-            .attr('r', function(d) { return r(+d[radius][year])*15; }) //без 15 точки слишком маленькие
-            .style("fill", function(d) { return color(+d[radius][year]); });
-
-        p.enter().append("circle")
-            .attr('cx', function(d) { return x(+d[xParam][year]); })
-            .attr('cy', function(d) { return y(+d[yParam][year]); })
-            .attr('r', function(d) { return r(+d[radius][year])*15; })
-            .style("fill", function(d) { return color(+d[radius][year]); });
-
+        
+        // ..
+    }
+    function outOfBubble(){
+        // Part 2 - сбросить stroke и stroke-width
+        d3.select(this)
+            .attr('stroke', '')
+            .attr('stroke-width', '');
+            
+        // Part 3 - изменить display у tooltip
+        tooltip.style('display', 'none');
     }
 
-    // рисуем график в первый раз
-    updateChart();
-});
+    function overArc(d){
+        console.log(d)
+        // Part 2 - изменить содержимое donut_lable
+        //alert(d.data)
+        donut_lable.text(d.data.key);
 
-// Эта функция загружает и обрабатывает файлы, без особого желания лучше ее не менять
-async function loadData() {
-    const population = await d3.csv('data/pop.csv');
-    const rest = { 
-        'gdp': await d3.csv('data/gdppc.csv'),
-        'child-mortality': await d3.csv('data/cmu5.csv'),
-        'life-expectancy': await d3.csv('data/life_expect.csv'),
-        'fertility-rate': await d3.csv('data/tfr.csv')
-    };
-    const data = population.map(d=>{
-        return {
-            geo: d.geo,
-            country: d.country,
-            region: d.region,
-            population: {...d},
-            ...Object.values(rest).map(v=>v.find(r=>r.geo===d.geo)).reduce((o, d, i)=>({...o, [Object.keys(rest)[i]]: d }), {})
-            
-        }
-    })
-    return data
-}
+
+        // Part 2 - изменить opacity арки
+        d3.select(this)
+            .style('opacity', 0.5);
+
+        // Part 3 - изменить opacity, stroke и stroke-width для circles в зависимости от rating
+        // pale all
+        nodes.style('opacity', 0.2)
+
+        bubble.selectAll('circle')
+            .filter((dd, i) => dd.rating == d.data.key)
+            .style('opacity', 1)
+            .style("stroke", "black");
+    }
+    function outOfArc(){
+        // Part 2 - изменить содержимое donut_lable
+        donut_lable.text('');
+
+        // Part 2 - изменить opacity арки
+        d3.select(this)
+            .style('opacity', 1);
+
+        // Part 3 - вернуть opacity, stroke и stroke-width для circles
+        nodes.style('opacity', 1)
+            .attr('stroke-width', 0);
+    }
+});
